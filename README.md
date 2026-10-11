@@ -1,3 +1,5 @@
+> **Community-maintained fork** of [typedeck0/Know-thy-enemy](https://github.com/typedeck0/Know-thy-enemy), updated to work with current arcdps (ImGui 1.92.7) and the Visions of Eternity elite specializations. All credit for the original addon goes to typedeck0.
+
  [Know thy enemy discord](https://discord.gg/6xDbA64rZc) for update notifications and chat.
 
 > Know thy enemy and know thyself, and need not fear the result of a hundred battles.
