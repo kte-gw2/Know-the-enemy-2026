@@ -504,7 +504,7 @@ void options_end_proc()
 		}
 	}
 
-	if (ImGui::CollapsingHeader("Diagnostics##kte", ImGuiTreeNodeFlags_DefaultOpen))
+	if (ImGui::CollapsingHeader("Diagnostics##kte"))
 	{
 		std::string text;
 		{
