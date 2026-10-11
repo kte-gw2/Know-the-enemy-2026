@@ -1,9 +1,7 @@
-@REM Build for Visual Studio compiler. Run your copy of vcvars32.bat or vcvarsall.bat to setup command-line compiler.
+@REM Build with the Visual Studio x64 compiler. Run vcvars64.bat first.
+@REM Needs Dear ImGui v1.92.7 (the version arcdps uses since May 2026) extracted to .\imgui
 @set OUT_DIR=out
-@set OUT_EXE=know-thy-enemy.dll
-@set INCLUDES=/I.\imgui /I.\imgui\backends /I "%WindowsSdkDir%Include\um" /I "%WindowsSdkDir%Include\shared" /I "%DXSDK_DIR%Include"
-@set SOURCES=know_thy_enemy.cpp .\imgui\backends\imgui_impl_dx11.cpp .\imgui\backends\imgui_impl_win32.cpp .\imgui\imgui*.cpp
-@set LIBS=/LIBPATH:"%DXSDK_DIR%/Lib/x86" d3d11.lib d3dcompiler.lib
+@set OUT_DLL=arcdps_know_thy_enemy.dll
+@set SOURCES=know_thy_enemy.cpp .\imgui\imgui.cpp .\imgui\imgui_draw.cpp .\imgui\imgui_tables.cpp .\imgui\imgui_widgets.cpp
 mkdir %OUT_DIR%
-cl /LD /EHsc /WX /O2 %INCLUDES% /D UNICODE /D _UNICODE %SOURCES% /Fe%OUT_DIR%/%OUT_EXE% /Fo%OUT_DIR%/ /link %LIBS%
-
+cl /LD /EHsc /O2 /std:c++17 /MT /I. /I.\imgui %SOURCES% /Fe%OUT_DIR%/%OUT_DLL% /Fo%OUT_DIR%/ /link user32.lib
