@@ -290,11 +290,40 @@ bool is_ours(const ag* a)
 
 bool is_damage_event(const cbtevent* ev)
 {
-	if (ev->is_statechange || ev->is_activation || ev->is_buffremove)
-		return false;
 	if (ev->buff)
-		return ev->buff_dmg > 0 && ev->value == 0; // condition tick
-	return ev->value > 0; // strike
+		return ev->buff_dmg != 0 && ev->value == 0; // condition tick
+	return ev->value != 0; // strike
+}
+
+/* diagnostics shown in the arcdps options panel, so in-game problems can be reported */
+struct diag_agent {
+	char name[32];
+	uint32_t prof, elite, self;
+	uint16_t team;
+};
+struct diagnostics {
+	uint64_t events = 0;
+	uint64_t notifications = 0;
+	uint64_t statechanges = 0;
+	uint64_t with_self = 0;
+	uint64_t player_vs_player = 0;
+	uint64_t ours_vs_other = 0;
+	uint64_t foe_iff = 0;
+	uint64_t not_wvw = 0;
+	uint64_t registered = 0;
+	uint8_t last_iff = 0xFF;
+	diag_agent last_self = {};
+	diag_agent last_other[4] = {};
+	int last_other_idx = 0;
+} diag;
+
+void diag_copy(diag_agent& d, const ag* a)
+{
+	snprintf(d.name, sizeof(d.name), "%s", a->name ? a->name : "(null)");
+	d.prof = a->prof;
+	d.elite = a->elite;
+	d.self = a->self;
+	d.team = a->team;
 }
 
 /* area combat callback -- may be called asynchronously */
@@ -304,6 +333,7 @@ void mod_combat(cbtevent* ev, ag* src, ag* dst, const char* skillname, uint64_t 
 
 	if (!ev)
 	{
+		diag.notifications++;
 		/* agent notifications: src->elite == 0 means squad/party add (prof != 0) or remove (prof == 0) */
 		if (src && dst && src->elite == 0)
 		{
@@ -321,22 +351,36 @@ void mod_combat(cbtevent* ev, ag* src, ag* dst, const char* skillname, uint64_t 
 		return;
 	}
 
-	if (!kte_settings.bEnabled)
+	diag.events++;
+	if (!kte_settings.bEnabled || !src || !dst)
 		return;
 
-	if (ev->is_statechange == CBTS_SQCOMBATSTART)
+	if (ev->is_statechange)
 	{
-		logstart_time = GetTickCount();
+		diag.statechanges++;
+		if (ev->is_statechange == CBTS_SQCOMBATSTART)
+			logstart_time = GetTickCount();
+		else if (ev->is_statechange == CBTS_SQCOMBATEND)
+			end_fight_locked();
 		return;
 	}
-	if (ev->is_statechange == CBTS_SQCOMBATEND)
-	{
-		end_fight_locked();
+	if (ev->is_activation || ev->is_buffremove)
 		return;
+
+	if (src->self)
+	{
+		diag.with_self++;
+		diag_copy(diag.last_self, src);
+	}
+	else if (dst->self)
+	{
+		diag.with_self++;
+		diag_copy(diag.last_self, dst);
 	}
 
-	if (!is_player(src) || !is_player(dst) || !is_damage_event(ev))
+	if (!is_player(src) || !is_player(dst))
 		return;
+	diag.player_vs_player++;
 
 	if (src->self && src->team)
 		my_team_id = src->team;
@@ -348,12 +392,25 @@ void mod_combat(cbtevent* ev, ag* src, ag* dst, const char* skillname, uint64_t 
 	if (src_ours == dst_ours)
 		return;
 	const ag* enemy = src_ours ? dst : src;
+	diag.ours_vs_other++;
+	diag.last_iff = ev->iff;
+	diag_copy(diag.last_other[diag.last_other_idx], enemy);
+	diag.last_other_idx = (diag.last_other_idx + 1) & 3;
+
+	// only hostile interactions: allies outside the squad also buff/heal us
+	if (ev->iff != IFF_FOE && !is_damage_event(ev))
+		return;
+	diag.foe_iff++;
 	if (my_team_id != 0 && enemy->team == my_team_id)
 		return;
 
 	if (kte_settings.bOnlyWvw && !is_wvw_map())
+	{
+		diag.not_wvw++;
 		return;
+	}
 
+	diag.registered++;
 	register_enemy_locked(enemy);
 }
 
@@ -445,6 +502,37 @@ void options_end_proc()
 				ImGui::Text("%u", t.team_id);
 			}
 		}
+	}
+
+	if (ImGui::CollapsingHeader("Diagnostics##kte", ImGuiTreeNodeFlags_DefaultOpen))
+	{
+		std::string text;
+		{
+			std::lock_guard<std::mutex> lock(mtx);
+			char buf[256];
+			uint32_t map_type = 0xFFFFFFFF, tick = 0;
+			open_mumble();
+			if (mumble)
+			{
+				memcpy(&map_type, mumble->context + 32, sizeof(map_type));
+				tick = mumble->uiTick;
+			}
+			snprintf(buf, sizeof(buf), "KTE 5.0.1 | mumble %s tick %u mapType %u wvw %d\n", mumble ? "ok" : "MISSING", tick, map_type, (int)is_wvw_map()); text += buf;
+			snprintf(buf, sizeof(buf), "events %llu notif %llu statechg %llu with_self %llu\n", (unsigned long long)diag.events, (unsigned long long)diag.notifications, (unsigned long long)diag.statechanges, (unsigned long long)diag.with_self); text += buf;
+			snprintf(buf, sizeof(buf), "pvp %llu ours_vs_other %llu foe %llu not_wvw %llu registered %llu last_iff %u\n", (unsigned long long)diag.player_vs_player, (unsigned long long)diag.ours_vs_other, (unsigned long long)diag.foe_iff, (unsigned long long)diag.not_wvw, (unsigned long long)diag.registered, (unsigned)diag.last_iff); text += buf;
+			snprintf(buf, sizeof(buf), "my_team %u squad %zu teams %zu\n", my_team_id, squad_ids.size(), histories.size()); text += buf;
+			const diag_agent& me = diag.last_self;
+			snprintf(buf, sizeof(buf), "self: prof %u elite %u team %u\n", me.prof, me.elite, me.team); text += buf;
+			for (auto& o : diag.last_other)
+			{
+				if (!o.name[0])
+					continue;
+				snprintf(buf, sizeof(buf), "other: %s prof %u elite %u team %u self %u\n", o.name, o.prof, o.elite, o.team, o.self); text += buf;
+			}
+		}
+		ImGui::TextUnformatted(text.c_str());
+		if (ImGui::Button("Copy diagnostics"))
+			ImGui::SetClipboardText(text.c_str());
 	}
 
 	ImGui::Separator();
@@ -820,7 +908,7 @@ arcdps_exports* mod_init()
 	arc_exports.imguivers = IMGUI_VERSION_NUM;
 	arc_exports.size = sizeof(arcdps_exports);
 	arc_exports.out_name = "Know thy enemy";
-	arc_exports.out_build = "5.0.0";
+	arc_exports.out_build = "5.0.1";
 	arc_exports.imgui = imgui_proc;
 	arc_exports.wnd_nofilter = mod_wnd;
 	arc_exports.combat = mod_combat;
